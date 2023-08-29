@@ -1,0 +1,56 @@
+---
+title: "pySCENIC"
+output: html_document
+date: "2023-03-06"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{python}
+
+pyscenic grn \
+--num_workers 28 \
+--output adj.sample.tsv \
+--method grnboost2 \
+sample.loom \
+tfs.txt
+
+pyscenic ctx adj.sample.tsv \
+    /cluster/home/yjliu_jh/soft/scenic/feather/hg38_10kbp_up_10kbp_down_full_tx_v10_clust.genes_vs_motifs.rankings.feather /cluster/home/yjliu_jh/soft/scenic/feather/hg38_10kbp_up_10kbp_down_full_tx_v10_clust.genes_vs_motifs.scores.feather /cluster/home/yjliu_jh/soft/scenic/feather/hg38_500bp_up_100bp_down_full_tx_v10_clust.genes_vs_motifs.rankings.feather /cluster/home/yjliu_jh/soft/scenic/feather/hg38_500bp_up_100bp_down_full_tx_v10_clust.genes_vs_motifs.scores.feather \
+    --annotations_fname "hgnc.tbl" \
+    --expression_mtx_fname "sample.loom" \
+    --output reg.csv \
+    --mask_dropouts \
+    --num_workers 30
+
+pyscenic aucell \
+    "sample.loom" \
+    reg.csv \
+    --output sample_SCENIC.loom \
+    --num_workers 12
+
+
+
+
+
+
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

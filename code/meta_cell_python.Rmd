@@ -1,0 +1,258 @@
+---
+title: "meta_cell_test"
+output: html_document
+date: "2023-02-23"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+
+# 1 assist the final annotation of cells
+# 2 may also aid for later analysis 
+# 3 test if this can be incorporated in the reference annotation pipeline (when with spare time)
+
+
+
+
+
+```{python}
+
+import anndata as ad
+import matplotlib.pyplot as plt
+import metacells as mc
+import numpy as np
+import os
+import pandas as pd
+import scipy.sparse as sp
+import seaborn as sb
+
+
+from math import hypot
+from matplotlib.collections import LineCollection
+import matplotlib_inline.backend_inline
+
+# get rid of iPython settings and such
+# matplotlib_inline.backend_inline.set_matplotlib_formats('svg')
+# sb.set_style("white")
+
+#raw = ad.read_h5ad('/cluster/home/yjliu_jh/projects/mef2d/data/mef2d_sct.h5ad')
+raw = ad.read_h5ad('/cluster/home/yjliu_jh/projects/mef2d/data/mef2d_tumor_rna.h5ad')
+mc.ut.set_name(raw, 'MEF2D')
+print(raw.shape)
+
+
+# remove suspicious genes
+
+excluded_gene_names = ['IGHMBP2', 'IGLL1', 'IGLL5', 'IGLON5', 'NEAT1', 'TMSB10', 'TMSB4X']
+excluded_gene_patterns = ['MT-.*']
+
+# open and edit:
+# /cluster/home/yjliu_jh/.local/lib/python3.7/site-packages/metacells/tools/downsample.py
+# remove assert float32 line
+# restart python
+
+
+mc.pl.analyze_clean_genes(raw,
+                          excluded_gene_names = excluded_gene_names,
+                          excluded_gene_patterns = excluded_gene_patterns,
+                          random_seed = 2023)
+
+mc.pl.pick_clean_genes(raw)
+
+# SCTAssay contains:
+# counts = (corrected UMI counts if all cells were sequenced with same depth) counts
+# data = log1p(counts)
+# scale.data = pearson residuals
+
+# save data
+full = raw
+full.__dict__['_raw'].__dict__['_var'] = full.__dict__['_raw'].__dict__['_var'].rename(columns={'_index': 'features'})
+full.write('/cluster/home/yjliu_jh/projects/mef2d/data/mef2d_rna_clean.h5ad')
+
+# filter according to UMIs
+properly_sampled_min_cell_total = 2500
+properly_sampled_max_cell_total = 25000
+
+total_umis_of_cells = mc.ut.get_o_numpy(full, name='__x__', sum=True)
+
+plot = sb.distplot(total_umis_of_cells)
+plot.set(xlabel='UMIs', ylabel='Density', yticks=[])
+plot.axvline(x=properly_sampled_min_cell_total, color='darkgreen')
+plot.axvline(x=properly_sampled_max_cell_total, color='crimson')
+plot.figure.savefig("/cluster/home/yjliu_jh/projects/mef2d/output/output.png")
+# check plot to ensure thresholds
+
+# check numbers
+too_small_cells_count = sum(total_umis_of_cells < properly_sampled_min_cell_total)
+too_large_cells_count = sum(total_umis_of_cells > properly_sampled_max_cell_total)
+
+too_small_cells_percent = 100.0 * too_small_cells_count / len(total_umis_of_cells)
+too_large_cells_percent = 100.0 * too_large_cells_count / len(total_umis_of_cells)
+
+print(f"Will exclude %s (%.2f%%) cells with less than %s UMIs"
+      % (too_small_cells_count,
+         too_small_cells_percent,
+         properly_sampled_min_cell_total))
+print(f"Will exclude %s (%.2f%%) cells with more than %s UMIs"
+      % (too_large_cells_count,
+         too_large_cells_percent,
+         properly_sampled_max_cell_total))
+
+
+# exclude cells based on excluded gene UMIs
+properly_sampled_max_excluded_genes_fraction = 0.15
+
+excluded_genes_data = mc.tl.filter_data(full, var_masks=['~clean_gene'])[0]
+excluded_umis_of_cells = mc.ut.get_o_numpy(excluded_genes_data, name='__x__', sum=True)
+excluded_fraction_of_umis_of_cells = excluded_umis_of_cells / total_umis_of_cells
+
+plt.clf()
+plot2 = sb.histplot(excluded_fraction_of_umis_of_cells)
+plot2.set(xlabel='Fraction of excluded gene UMIs', ylabel='Density', yticks=[])
+plot2.axvline(x=properly_sampled_max_excluded_genes_fraction, color='crimson')
+plot2.figure.savefig("/cluster/home/yjliu_jh/projects/mef2d/output/output2.png")
+
+
+to_excluded_cells_count = sum(excluded_fraction_of_umis_of_cells > properly_sampled_max_excluded_genes_fraction)
+
+to_excluded_cells_percent = 100.0 * to_excluded_cells_count / len(total_umis_of_cells)
+
+print(f"Will exclude %s (%.2f%%) cells with more than %.2f%% excluded gene UMIs"
+      % (to_excluded_cells_count,
+         to_excluded_cells_percent,
+         100.0 * properly_sampled_max_excluded_genes_fraction))
+
+
+mc.pl.analyze_clean_cells(
+    full,
+    properly_sampled_min_cell_total = properly_sampled_min_cell_total,
+    properly_sampled_max_cell_total = properly_sampled_max_cell_total,
+    properly_sampled_max_excluded_genes_fraction = properly_sampled_max_excluded_genes_fraction)
+
+
+mc.pl.pick_clean_cells(full)
+clean = mc.pl.extract_clean_data(full)
+
+suspect_gene_names = ['PCNA', 'MKI67', 'TOP2A', 'HIST1H1D',   ## cell cycle
+                      'FOS', 'JUN', 'HSP90AB1', 'HSPA1A', 'HIF1A', 'TXN', ## stress
+                      'ISG15', 'OAS1', 'WARS',  ## type I IFN
+                      'XIST', 'TSIX', 'ZFY', 'RPS4Y']   ## gender related
+suspect_gene_patterns = [ 'MCM[0-9]', 'SMC[0-9]', 'IFI.*' ]  ## cell cycle and IFN
+suspect_genes_mask = mc.tl.find_named_genes(clean, names=suspect_gene_names,
+                                            patterns=suspect_gene_patterns)
+suspect_gene_names = sorted(clean.var_names[suspect_genes_mask])
+
+
+# filter genes related to cell_cycle and other genes (gender related? added one ZFY)
+mc.pl.relate_genes(clean, random_seed = 2023)
+
+# get modules of genes related to the suspect genes
+
+module_of_genes = clean.var['related_genes_module']
+suspect_gene_modules = np.unique(module_of_genes[suspect_genes_mask])
+suspect_gene_modules = suspect_gene_modules[suspect_gene_modules >= 0]
+print(suspect_gene_modules)
+
+similarity_of_genes = mc.ut.get_vv_frame(clean, 'related_genes_similarity')
+for gene_module in suspect_gene_modules:
+    module_genes_mask = module_of_genes == gene_module
+    similarity_of_module = similarity_of_genes.loc[module_genes_mask, module_genes_mask]
+    similarity_of_module.index = \
+    similarity_of_module.columns = [
+        '(*) ' + name if name in suspect_gene_names else name
+        for name in similarity_of_module.index
+    ]
+    ax = plt.axes()
+    plot3 = sb.heatmap(similarity_of_module, vmin=0, vmax=1, xticklabels=True, yticklabels=True, ax=ax, cmap="YlGnBu")
+    ax.set_title(f'Gene Module {gene_module}')
+    plot3.figure.savefig("/cluster/home/yjliu_jh/projects/mef2d/output/output" +  gene_module.astype('U') + ".png")
+    plt.clf()
+
+
+# remove genes with strong patterns
+forbidden_genes_mask = suspect_genes_mask
+# for gene_module in [10, 22, 24, 31, 44, 50, 54, 62, 75, 91, 123]:
+# for gene_module in [7, 61, 82, 99, 100, 125, 142, 151, 153, 159, 172, 175, 179]:
+for gene_module in [4, 9, 25, 28, 33, 39, 64, 77, 78, 94, 135]:
+    module_genes_mask = module_of_genes == gene_module
+    forbidden_genes_mask |= module_genes_mask
+
+    
+forbidden_gene_names = sorted(clean.var_names[forbidden_genes_mask])
+print(len(forbidden_gene_names))
+print(' '.join(forbidden_gene_names))
+
+
+# estimate max parallel
+max_parallel_piles = mc.pl.guess_max_parallel_piles(clean)
+print(max_parallel_piles)
+mc.pl.set_max_parallel_piles(max_parallel_piles)
+# start calculation of meta-cells
+with mc.ut.progress_bar():
+    mc.pl.divide_and_conquer_pipeline(clean,
+                                      forbidden_gene_names = forbidden_gene_names,
+                                      target_metacell_size = 500000,
+                                      random_seed = 2023)
+                                      
+                                      
+metacells = mc.pl.collect_metacells(clean, name='MEF2D.metacells')
+# 790 metacells
+# 824 metacells for all tumor
+# 1383 metacells for all
+
+# test visualization
+mc.pl.compute_umap_by_features(metacells, max_top_feature_genes = 1000,
+                               min_dist = 2.0, random_seed = 2023)
+
+umap_x = mc.ut.get_o_numpy(metacells, 'umap_x')
+umap_y = mc.ut.get_o_numpy(metacells, 'umap_y')
+plot4 = sb.scatterplot(x = umap_x, y = umap_y)
+plot4.figure.savefig("/cluster/home/yjliu_jh/projects/mef2d/output/metacell_umap.png")
+plt.clf()
+
+
+# plot skeleton (KNN graph) on umap
+umap_edges = sp.coo_matrix(mc.ut.get_oo_proper(metacells, 'obs_outgoing_weights'))
+min_long_edge_size = 4
+sb.set()
+plot5 = sb.scatterplot(x = umap_x, y = umap_y)
+for (source_index, target_index, weight) \
+        in zip(umap_edges.row, umap_edges.col, umap_edges.data):
+    source_x = umap_x[source_index]
+    target_x = umap_x[target_index]
+    source_y = umap_y[source_index]
+    target_y = umap_y[target_index]
+    if hypot(target_x - source_x, target_y - source_y) >= min_long_edge_size:
+        plt.plot([source_x, target_x], [source_y, target_y],
+                 linewidth = weight * 2, color = 'indigo')
+             
+                 
+plot5.figure.savefig("/cluster/home/yjliu_jh/projects/mef2d/output/metacell_umap_knn.png")
+plt.clf()
+
+
+# save metacells to h5ad data 
+
+name = metacells.uns['__name__']
+del metacells.uns['__name__']
+metacells.write('/cluster/home/yjliu_jh/projects/mef2d/data/mef2d_tumor_for_seurat.h5ad')
+clean.write('/cluster/home/yjliu_jh/projects/mef2d/data/mef2d_tumor_cells.h5ad')
+
+
+# remove assert first_matrix.dtype == second_matrix.dtype in utilities/computation.py line 470
+# restart 
+mc.ut.set_name(metacells, 'MEF2D')
+outliers = mc.pl.compute_for_mcview(adata = clean, gdata = metacells, random_seed = 2023, compute_var_var_similarity = dict(top = 50, bottom = 50))
+outliers.write('/cluster/home/yjliu_jh/projects/mef2d/data/mef2d_tumor_outliers.h5ad')
+metacells.write('/cluster/home/yjliu_jh/projects/mef2d/data/mef2d_tumor_metacells.h5ad')
+
+
+
+
+```
+
+
